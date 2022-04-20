@@ -1,42 +1,5 @@
 #!/bin/bash
 #
-# INSTRUCTIONS FOR USE:
-# 1. Copy this shell script to your home directory or the /tmp directory.
-# 2. Make it executable with the following command: 
-#      chmod a+x setup-jenkins-on-cent-os-7.sh
-# 3. Execute the script as a sudo user:
-#      sudo ./setup-jenkins-on-cent-os-7.sh
-#
-# It's important to point out that this script assumes that none of the binaries 
-# that are to be installed are already present on the target server. If you already
-# have the EPEL repository installed on your target server, you should first remove it
-# by following the instructions in this link:
-#
-#
-# If you already have Jenkins installed on your target server, please be aware that
-# the user 'Anonymous' needs to have ALL privileges in order to successfully plugins
-# as part of this shell script. After running this shell script, you can return
-# the anonynous user to have less privileges.
-
-# Since this script needs to be runnable on either CentOS7 or CentOS6, we need to first 
-# check which version of CentOS that we are running and place that into a variable.
-# Knowing the version of CentOS is important because some shell commands that had
-# worked in CentOS 6 or earlier no longer work under CentOS 7
-
-RELEASE=`cat /etc/redhat-release`
-isCentOs7=false
-SUBSTR=`echo $RELEASE|cut -c1-22`
-
-if [ "$SUBSTR" == "CentOS Linux release 7" ]
-then
-    isCentOs7=true
-fi
-
-if [ "$isCentOs7" == true ]
-then
-    echo "I am CentOS 7"
-fi
-
 CWD=`pwd`
 
 #Preparing the environment
@@ -48,82 +11,41 @@ openssl
 ant \
 epel-release \
 
-if [ "$isCentOs7" == true ]
-then
-    sudo wget -N http://dl.iuscommunity.org/pub/ius/stable/CentOS/7/x86_64/ius-release-1.0-13.ius.centos7.noarch.rpm
-    sudo rpm -Uvh ius-release*.rpm
-else
-    sudo wget -N http://dl.iuscommunity.org/pub/ius/stable/CentOS/6/x86_64/ius-release-1.0-13.ius.centos6.noarch.rpm
-    sudo rpm -Uvh ius-release*.rpm
-fi
-
 #Removing by default java binaries
 sudo yum remove -y java
 
-#Install the OpenJDK version of Java 8:
-sudo yum install -y java-1.8.0-openjdk
-
 # Let's now install Jenkins:
-sudo wget -O /etc/yum.repos.d/jenkins.repo http://pkg.jenkins-ci.org/redhat/jenkins.repo
-sudo rpm --import http://pkg.jenkins-ci.org/redhat/jenkins-ci.org.key
-sudo yum install -y jenkins
+sudo wget -O /etc/yum.repos.d/jenkins.repo \
+https://pkg.jenkins.io/redhat-stable/jenkins.repo
+sudo rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io.key
+sudo yum upgrade
+
+# Add required dependencies for the jenkins package
+sudo yum install java-11-openjdk
+sudo yum install jenkins
+sudo systemctl daemon-reload
 
 # Let's start Jenkins
-if [ "$isCentOs7" == true ]
-then
-    sudo systemctl start jenkins
-else 
-    sudo service jenkins start
-fi
+sudo systemctl enable jenkins
+sudo systemctl start jenkins
+sudo systemctl status jenkins
 
 # Jenkins runs on port 8080 by default. Let's make sure port 8080 is open:
-if [ "$isCentOs7" == true ]
-then
-    sudo firewall-cmd --zone=public --add-port=8080/tcp --permanent
-    sudo firewall-cmd --reload
-else
-    sudo iptables -A INPUT -p tcp -m tcp --dport 8080 -j ACCEPT
-    sudo service iptables save
-    sudo service iptables restart
-fi
+YOURPORT=8080
+PERM="--permanent"
+SERV="$PERM --service=jenkins"
+
+firewall-cmd $PERM --new-service=jenkins
+firewall-cmd $SERV --set-short="Jenkins ports"
+firewall-cmd $SERV --set-description="Jenkins port exceptions"
+firewall-cmd $SERV --add-port=$YOURPORT/tcp
+firewall-cmd $PERM --add-service=jenkins
+firewall-cmd --zone=public --add-service=http --permanent
+firewall-cmd --reload
+
 
 # Let's make sure that git is installed since Jenkins will need this
-sudo yum install -y git
-
-# Install phpDox, which is needed by Jenkins.
-# https://github.com/theseer/phpdox
-sudo wget -N http://phpdox.de/releases/phpdox.phar
-sudo chmod +x phpdox.phar
-sudo mv phpdox.phar /usr/bin/phpdox
-
-
-# Install 'composer':
-sudo curl -sS https://getcomposer.org/installer | sudo php -- --install-dir=/usr/bin --filename=composer
-
-# Now that composer is installed, let's install PHPUnit and its associated packages:
-sudo composer global require "phpunit/phpunit=4.3.*"
-sudo composer global require "phpunit/php-invoker"
-sudo composer global require "phpunit/dbunit": ">=1.2"
-sudo composer global require "phpunit/phpunit-selenium": ">=1.2"
-
-# PHP CodeSniffer:
-sudo composer global require "squizlabs/php_codesniffer"
-
-sudo composer update
-
-# We need to increase the memory limit used by PHP:
-sudo sed -i 's/memory_limit = 128M/memory_limit = 2048M/g' /etc/php.ini
-
-# Let's update Jenkins to use the PHP tools that we had installed with Composer:
-sudo curl -L http://updates.jenkins-ci.org/update-center.json | sed '1d;$d' | curl -X POST -H 'Accept: application/json' -d @- http://localhost:8080/updateCenter/byId/default/postBack
-
-sudo wget -N http://localhost:8080/jnlpJars/jenkins-cli.jar
-
-sudo java -jar jenkins-cli.jar -s http://localhost:8080 install-plugin checkstyle cloverphp crap4j dry htmlpublisher jdepend plot pmd violations xunit
-
-# Install the PHP-Jenkins job template:
-sudo wget -N http://localhost:8080/jnlpJars/jenkins-cli.jar
-sudo curl -L https://raw.githubusercontent.com/sebastianbergmann/php-jenkins-template/master/config.xml | sudo java -jar jenkins-cli.jar -s http://localhost:8080 create-job php-template
+sudo yum install -y gitm
 
 # Lastly, let's install the plugins needed in Jenkins to connect to Github and get a fairly well-running Jenkins installation:
 cd /var/lib/jenkins/plugins
@@ -199,4 +121,6 @@ echo "  http://localhost:8080"
 echo ""
 echo "Although Jenkins should be installed at this point, it hasn't been secured. See this link:"
 echo "https://wiki.jenkins-ci.org/display/JENKINS/Standard+Security+Setup"
+echo "Additional documentation: https://www.jenkins.io/doc/book/installing/linux/#red-hat-centos"
 echo ""
+
